@@ -2,9 +2,11 @@ from datetime import datetime
 import json
 import os
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi import security
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
@@ -12,10 +14,21 @@ from bson import ObjectId
 from google import genai
 from urllib.parse import quote
 from dateutil.parser import parse
+from jose import JWTError, jwt
+from jose.constants import ALGORITHMS
 
 load_dotenv()
 
+AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
+AUTH0_AUDIENCE = os.getenv("AUTH0_AUDIENCE")
+AUTH0_ALGORITHMS = [ALGORITHMS.RS256]
+
 gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+class Auth0User(BaseModel):
+    sub: str
+    name: Optional[str] = None
+    email: Optional[str] = None
 
 class CalendarEvent(BaseModel):
     event_name: str
@@ -77,6 +90,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Auth0User:
+    try:
+        token = credentials.credentials
+        jwks_url = f"https://{AUTH0_DOMAIN}/.well-known/jwks.json"
+        issuer = f"https://{AUTH0_DOMAIN}/"
+        
+        payload = jwt.decode(
+            token,
+            key=jwks_url,
+            algorithms=AUTH0_ALGORITHMS,
+            audience=AUTH0_AUDIENCE,
+            issuer=issuer,
+            options={"verify_aud": True, "verify_iss": True}
+        )
+        return Auth0User(**payload)
+    except JWTError as e:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
 async def generate_summary(text: str, date) -> dict:
     """Send text to Gemini and get structured summary"""
     try:
@@ -229,15 +264,13 @@ def read_root():
     return {"Hello": "World"}
 
 @app.get("/appointments", response_model=list[dict])
-async def get_all_appointments():
+async def get_all_appointments(user: Auth0User = Depends(get_current_user)):
     try:
-        # Project only the fields we want to return
         appointments = db["appointments"].find(
-            {},
+            {"user_id": user.sub},  # Only get appointments for this user
             {"date": 1, "name": 1}
         )
         
-        # Convert to list and add string version of _id
         appointment_list = []
         for appointment in appointments:
             appointment["_id"] = str(appointment["_id"])
@@ -246,6 +279,25 @@ async def get_all_appointments():
         return appointment_list
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+# @app.get("/appointments", response_model=list[dict])
+# async def get_all_appointments():
+#     try:
+#         # Project only the fields we want to return
+#         appointments = db["appointments"].find(
+#             {},
+#             {"date": 1, "name": 1}
+#         )
+        
+#         # Convert to list and add string version of _id
+#         appointment_list = []
+#         for appointment in appointments:
+#             appointment["_id"] = str(appointment["_id"])
+#             appointment_list.append(appointment)
+            
+#         return appointment_list
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/appointments", response_model=Appointment)
 async def create_appointment(appointment: Appointment):
