@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 from bson import ObjectId
-from google import genai
+import google.generativeai as genai
 from urllib.parse import quote
 from dateutil.parser import parse
 
@@ -21,7 +21,8 @@ AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 AUTH0_AUDIENCE = os.getenv("AUTH0_AUDIENCE")
 ALGORITHMS = ["RS256"]
 
-gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
 
 class Auth0User(BaseModel):
     sub: str
@@ -389,7 +390,7 @@ async def process_transcript(transcript: Transcript):
         # Embed links in summary text
         summary_with_links = result["summary"]
         for event in events_with_links:
-            summary_with_links += f"\n\n[Add '{event["event_name"]}' to Calendar]({event["google_calendar_link"]})"    
+            summary_with_links += f"\n\n[Add '{event['event_name']}' to Calendar]({event['google_calendar_link']})"    
 
         note_data = {
             "text": summary_with_links,
