@@ -1,5 +1,5 @@
-import { LogoutButton } from "@auth0/auth0-react";
+const LogoutButton = () => {
+  return <a href="/auth/logout">Logout</a>;
+};
 
-function Logout() {
-  return <LogoutButton>Log Out</LogoutButton>;
-}
+export default LogoutButton;

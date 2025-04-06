@@ -82,7 +82,8 @@ class AppointmentUpdate(BaseModel):
             return v.isoformat()
         return v
 
-MONGODB_URI = os.getenv("MONGODB_URI")
+# MONGODB_URI = os.getenv("MONGODB_URI")
+MONGODB_URI = os.getenv("MONGODB_URI") or "mongodb+srv://a1yin:HY8Xwpmq3cg51Stu@cluster0.konpzhu.mongodb.net/?retryWrites=true&w=majority&tls=true"
 try:
     client = MongoClient(MONGODB_URI, server_api=ServerApi('1'))
     # Test the connection

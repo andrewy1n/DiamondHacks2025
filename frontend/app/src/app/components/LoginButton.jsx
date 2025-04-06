@@ -1,5 +1,5 @@
 const LoginButton = () => {
-  return <a href="/api/auth/login">Login</a>;
+  return <a href="/auth/login">Login</a>;
 };
 
 export default LoginButton;
