@@ -2,11 +2,11 @@ from datetime import datetime
 import json
 import os
 from typing import Any, Dict, List, Optional
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi import security
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import httpx
 from pydantic import BaseModel, Field, field_validator
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
@@ -14,14 +14,12 @@ from bson import ObjectId
 from google import genai
 from urllib.parse import quote
 from dateutil.parser import parse
-from jose import JWTError, jwt
-from jose.constants import ALGORITHMS
 
 load_dotenv()
 
 AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 AUTH0_AUDIENCE = os.getenv("AUTH0_AUDIENCE")
-AUTH0_ALGORITHMS = [ALGORITHMS.RS256]
+ALGORITHMS = ["RS256"]
 
 gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
@@ -44,6 +42,21 @@ class Note(BaseModel):
     appointment_id: str = Field(..., description="Appointment ID")
 
 class Appointment(BaseModel):
+    date: str = Field(..., description="Appointment datetime with timezone", examples=["2024-06-30T20:55:05.926275+00:00"])
+    name: str = Field(..., min_length=2, description="Appointment name")
+    note_id: Optional[str] = Field(None, description="Reference to generated note")
+    transcript_id: Optional[str] = Field(None, description="Reference to transcript")
+
+    @field_validator('date', mode='before')
+    def convert_to_iso(cls, v):
+        if isinstance(v, dict) and '$date' in v:
+            return v['$date']
+        if isinstance(v, datetime):
+            return v.isoformat()
+        return v
+
+class AppointmentWithID(BaseModel):
+    user_id: str = Field(..., description="User ID")
     date: str = Field(..., description="Appointment datetime with timezone", examples=["2024-06-30T20:55:05.926275+00:00"])
     name: str = Field(..., min_length=2, description="Appointment name")
     note_id: Optional[str] = Field(None, description="Reference to generated note")
@@ -90,25 +103,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Auth0User:
+security = HTTPBearer()
+
+async def get_jwks():
+    jwks_url = f"https://{AUTH0_DOMAIN}/.well-known/jwks.json"
+    async with httpx.AsyncClient() as client:
+        response = await client.get(jwks_url)
+        return response.json()
+
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    
+    # In a production environment, you would:
+    # 1. Verify the token signature using the JWKS from Auth0
+    # 2. Check the token claims (iss, aud, exp, etc.)
+    # For simplicity, we'll just call Auth0's userinfo endpoint here
+    
+    userinfo_url = f"https://{AUTH0_DOMAIN}/userinfo"
+    headers = {"Authorization": f"Bearer {token}"}
+    
     try:
-        token = credentials.credentials
-        jwks_url = f"https://{AUTH0_DOMAIN}/.well-known/jwks.json"
-        issuer = f"https://{AUTH0_DOMAIN}/"
-        
-        payload = jwt.decode(
-            token,
-            key=jwks_url,
-            algorithms=AUTH0_ALGORITHMS,
-            audience=AUTH0_AUDIENCE,
-            issuer=issuer,
-            options={"verify_aud": True, "verify_iss": True}
-        )
-        return Auth0User(**payload)
-    except JWTError as e:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(userinfo_url, headers=headers)
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired token",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return response.json()
+    except Exception as e:
         raise HTTPException(
-            status_code=401,
-            detail="Invalid authentication credentials",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -264,10 +291,10 @@ def read_root():
     return {"Hello": "World"}
 
 @app.get("/appointments", response_model=list[dict])
-async def get_all_appointments(user: Auth0User = Depends(get_current_user)):
+async def get_all_appointments(user: dict = Depends(verify_token)):
     try:
         appointments = db["appointments"].find(
-            {"user_id": user.sub},  # Only get appointments for this user
+            {"user_id": user["sub"]},  # Only get appointments for this user
             {"date": 1, "name": 1}
         )
         
@@ -279,30 +306,12 @@ async def get_all_appointments(user: Auth0User = Depends(get_current_user)):
         return appointment_list
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-# @app.get("/appointments", response_model=list[dict])
-# async def get_all_appointments():
-#     try:
-#         # Project only the fields we want to return
-#         appointments = db["appointments"].find(
-#             {},
-#             {"date": 1, "name": 1}
-#         )
-        
-#         # Convert to list and add string version of _id
-#         appointment_list = []
-#         for appointment in appointments:
-#             appointment["_id"] = str(appointment["_id"])
-#             appointment_list.append(appointment)
-            
-#         return appointment_list
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/appointments", response_model=Appointment)
-async def create_appointment(appointment: Appointment):
+@app.post("/appointments", response_model=dict)
+async def create_appointment(appointment: Appointment, user: dict = Depends(verify_token)):
     try:
         appointment_data = appointment.model_dump()
+        appointment_data["user_id"] = user["sub"]
         
         result = db["appointments"].insert_one(appointment_data)
         new_appointment = db["appointments"].find_one({"_id": result.inserted_id})
