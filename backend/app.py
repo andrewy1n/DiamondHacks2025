@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 from bson import ObjectId
-import google.generativeai as genai
+from google import genai
 from urllib.parse import quote
 from dateutil.parser import parse
 
@@ -21,8 +21,7 @@ AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 AUTH0_AUDIENCE = os.getenv("AUTH0_AUDIENCE")
 ALGORITHMS = ["RS256"]
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
+gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 class Auth0User(BaseModel):
     sub: str
