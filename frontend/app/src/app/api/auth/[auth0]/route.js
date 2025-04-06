@@ -1,3 +1,3 @@
-import { createAuth } from '@auth0/nextjs-auth0/edge';
+import { handleAuth } from '@auth0/nextjs-auth0/edge';
 
-export const { GET, POST } = createAuth();
+export const GET = handleAuth();
